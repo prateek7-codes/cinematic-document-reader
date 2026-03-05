@@ -694,12 +694,12 @@ export default function Home() {
         <div className="min-h-screen w-full flex flex-col items-center justify-center px-4 py-8 md:px-8 md:py-12 relative">
           {/* Global progress bar at the very bottom */}
           <div
-            className={`fixed bottom-0 left-0 w-full h-[2px] bg-black/70 backdrop-blur-sm z-40 transition-opacity duration-500 ${
+            className={`fixed bottom-0 left-0 w-full h-[3px] bg-black/80 backdrop-blur-md z-40 transition-opacity duration-500 ${
               uiChromeVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
             }`}
           >
             <div
-              className="h-full bg-gradient-to-r from-emerald-400 via-sky-400 to-violet-500 shadow-[0_0_14px_rgba(56,189,248,0.8)] transition-all duration-300"
+              className="h-full bg-gradient-to-r from-emerald-400 via-sky-400 to-violet-500 shadow-[0_0_20px_rgba(56,189,248,0.9),_0_0_40px_rgba(56,189,248,0.4)] transition-all duration-300 ease-out"
               style={{ width: `${progress}%` }}
             />
           </div>
@@ -960,7 +960,7 @@ export default function Home() {
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   transition={{ duration: 0.3, ease: 'easeOut' }}
-                  className="relative h-[78vh] md:h-[82vh] w-full px-5 sm:px-8 md:px-14 py-10 md:py-14 text-[18px] leading-relaxed transition-opacity duration-500 ease-out opacity-0 overflow-hidden"
+                  className="relative h-[78vh] md:h-[82vh] w-full px-5 sm:px-8 md:px-14 py-10 md:py-14 text-[18px] leading-relaxed overflow-hidden"
                 />
               </div>
             </motion.div>
