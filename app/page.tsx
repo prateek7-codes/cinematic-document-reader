@@ -433,7 +433,14 @@ export default function Home() {
 
       rendition.on("rendered", () => {
         if (!cancelled) {
-          // EPUB content rendered successfully
+          // Fix iframe sandbox to eliminate security warning
+          setTimeout(() => {
+            const iframe = viewerRef.current?.querySelector('iframe')
+            if (iframe && iframe.getAttribute('sandbox')?.includes('allow-same-origin')) {
+              // Use only allow-scripts to prevent the sandbox escape warning
+              iframe.setAttribute('sandbox', 'allow-scripts')
+            }
+          }, 100)
         }
       })
 
