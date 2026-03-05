@@ -223,6 +223,9 @@ export default function Home() {
   })
   const [chapters, setChapters] = useState<ChapterItem[]>([])
   const [showBookmarksPanel, setShowBookmarksPanel] = useState(false)
+  const [showInfoPanel, setShowInfoPanel] = useState(false)
+  const [isUiVisible, setIsUiVisible] = useState(true)
+  const uiHideTimeoutRef = useRef<number | null>(null)
 
   const cleanupRendition = useCallback(() => {
     if (keyHandlerRef.current) {
@@ -552,7 +555,13 @@ export default function Home() {
   }
 
   const toggleReaderMode = () => {
-    setIsReaderMode((prev) => !prev)
+    setIsReaderMode((prev) => {
+      const next = !prev
+      if (next) {
+        setShowInfoPanel(false)
+      }
+      return next
+    })
   }
 
   const toggleFullscreen = async () => {
@@ -605,6 +614,43 @@ export default function Home() {
     }
   }
 
+  // Ghost UI: hide chrome (toolbar + progress bar) after inactivity
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    const resetUiTimer = () => {
+      setIsUiVisible(true)
+      if (uiHideTimeoutRef.current) {
+        window.clearTimeout(uiHideTimeoutRef.current)
+      }
+      uiHideTimeoutRef.current = window.setTimeout(() => {
+        setIsUiVisible(false)
+      }, 3000)
+    }
+
+    resetUiTimer()
+
+    const events: (keyof DocumentEventMap)[] = [
+      'mousemove',
+      'mousedown',
+      'keydown',
+      'touchstart',
+    ]
+
+    events.forEach((evt) => {
+      window.addEventListener(evt, resetUiTimer, { passive: true } as any)
+    })
+
+    return () => {
+      if (uiHideTimeoutRef.current) {
+        window.clearTimeout(uiHideTimeoutRef.current)
+      }
+      events.forEach((evt) => {
+        window.removeEventListener(evt, resetUiTimer as any)
+      })
+    }
+  }, [])
+
   return (
     <main className="min-h-screen bg-[#050509] bg-[radial-gradient(circle_at_center,_rgba(30,30,40,0.9)_0,_#050509_55%,_#000_100%)] text-white">
       {!bookFile ? (
@@ -637,43 +683,64 @@ export default function Home() {
       ) : (
         <div className="min-h-screen w-full flex flex-col items-center justify-center px-4 py-8 md:px-8 md:py-12 relative">
           {/* Global progress bar at the very bottom */}
-          <div className="fixed bottom-0 left-0 w-full h-1.5 bg-black/70 backdrop-blur-sm z-40">
+          <div
+            className={`fixed bottom-0 left-0 w-full h-[2px] bg-black/70 backdrop-blur-sm z-40 transition-opacity duration-500 ${
+              isUiVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
+            }`}
+          >
             <div
-              className="h-full bg-gradient-to-r from-emerald-400 via-sky-400 to-violet-500 shadow-[0_0_18px_rgba(56,189,248,0.7)] transition-all duration-300"
+              className="h-full bg-gradient-to-r from-emerald-400 via-sky-400 to-violet-500 shadow-[0_0_14px_rgba(56,189,248,0.8)] transition-all duration-300"
               style={{ width: `${progress}%` }}
             />
           </div>
 
-          {/* Floating control pills */}
-          <div className="fixed top-4 right-4 z-40 flex flex-col items-end gap-2">
-            <div className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-black/60 px-3 py-1.5 text-[10px] uppercase tracking-[0.18em] text-white/80 backdrop-blur-xl shadow-[0_18px_45px_rgba(0,0,0,0.65)]">
+          {/* Unified floating toolbar */}
+          <div
+            className={`fixed top-4 right-4 z-50 transition-opacity duration-500 ${
+              isUiVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
+            }`}
+          >
+            <div className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-black/60/75 px-4 py-2 text-[10px] uppercase tracking-[0.18em] text-white/80 backdrop-blur-2xl shadow-[0_18px_45px_rgba(0,0,0,0.85)]">
               <button
                 onClick={toggleTheme}
-                className="px-2 py-0.5 rounded-full bg-white/5 hover:bg-white/10 transition"
+                className="px-2 py-1 rounded-full bg-white/5 hover:bg-white/10 transition"
               >
                 {theme === 'cinematic-dark' ? 'Cinematic · Dark' : 'Classic · Sepia'}
               </button>
               <span className="h-4 w-px bg-white/15" />
               <button
                 onClick={toggleSpreadMode}
-                className="px-2 py-0.5 rounded-full bg-white/5 hover:bg-white/10 transition"
+                className="px-2 py-1 rounded-full bg-white/5 hover:bg-white/10 transition"
               >
                 {spreadMode === 'none' ? 'Single Page' : 'Two‑Page'}
               </button>
-            </div>
-            <div className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-black/60 px-3 py-1.5 text-[10px] uppercase tracking-[0.18em] text-white/80 backdrop-blur-xl shadow-[0_18px_45px_rgba(0,0,0,0.65)]">
+              <span className="h-4 w-px bg-white/15" />
               <button
                 onClick={toggleFullscreen}
-                className="px-2 py-0.5 rounded-full bg-white/5 hover:bg-white/10 transition"
+                className="px-2 py-1 rounded-full bg-white/5 hover:bg-white/10 transition"
               >
                 Full Screen
               </button>
               <span className="h-4 w-px bg-white/15" />
               <button
                 onClick={toggleReaderMode}
-                className="px-2 py-0.5 rounded-full bg-white/5 hover:bg-white/10 transition"
+                className="px-2 py-1 rounded-full bg-white/5 hover:bg-white/10 transition"
               >
                 {isReaderMode ? 'Exit Reader' : 'Reader Mode'}
+              </button>
+              <span className="h-4 w-px bg-white/15" />
+              <button
+                type="button"
+                onClick={() => {
+                  if (isReaderMode) return
+                  setShowInfoPanel((prev) => !prev)
+                }}
+                className={`px-2 py-1 rounded-full bg-white/5 hover:bg-white/10 transition ${
+                  isReaderMode ? 'opacity-40 cursor-default pointer-events-none' : ''
+                }`}
+                aria-label="Book information"
+              >
+                Info
               </button>
             </div>
           </div>
@@ -749,6 +816,66 @@ export default function Home() {
             </div>
           )}
 
+          {/* Director's Cut slide-out drawer */}
+          <AnimatePresence>
+            {showInfoPanel && !isReaderMode && directorInfo && (
+              <motion.aside
+                initial={{ opacity: 0, x: 40 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: 40 }}
+                transition={{ duration: 0.35, ease: 'easeOut' }}
+                className="fixed right-4 top-20 bottom-6 w-80 max-w-[80vw] z-40 rounded-2xl border border-white/15 bg-black/85 backdrop-blur-2xl shadow-[0_30px_80px_rgba(0,0,0,0.95)] p-5 text-sm"
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <div className="text-xs uppercase tracking-[0.22em] text-white/70">
+                    Director&apos;s Cut
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowInfoPanel(false)}
+                    className="text-[11px] text-white/50 hover:text-white/80"
+                  >
+                    Close
+                  </button>
+                </div>
+                <div className="space-y-3 text-neutral-100/90">
+                  <div>
+                    <div className="text-[11px] uppercase tracking-[0.18em] text-white/50">
+                      Title
+                    </div>
+                    <div className="mt-1 text-base font-medium text-white">
+                      {directorInfo.title || 'Unknown Title'}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] uppercase tracking-[0.18em] text-white/50">
+                      Author
+                    </div>
+                    <div className="mt-1 text-[13px] text-white/80">
+                      {directorInfo.author || 'Unknown Author'}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] uppercase tracking-[0.18em] text-white/50 mb-1">
+                      Movie Pitch
+                    </div>
+                    <p className="text-[13px] leading-relaxed text-white/90 italic font-serif">
+                      {directorInfo.logline}
+                    </p>
+                  </div>
+                  <div>
+                    <div className="text-[11px] uppercase tracking-[0.18em] text-white/50 mb-1">
+                      Opening Pages
+                    </div>
+                    <p className="text-[12px] leading-relaxed text-white/80 line-clamp-[10]">
+                      {directorInfo.previewText}
+                    </p>
+                  </div>
+                </div>
+              </motion.aside>
+            )}
+          </AnimatePresence>
+
           <AnimatePresence mode="wait">
             <motion.div
               key={bookFile ? 'reader-loaded' : 'reader-empty'}
@@ -759,6 +886,20 @@ export default function Home() {
               transition={{ duration: 0.8, ease: 'easeOut' }}
               className="relative w-full max-w-6xl flex flex-col md:flex-row items-stretch justify-center md:items-start md:justify-between gap-6 md:gap-10"
             >
+              {/* Full-screen tap zones for navigation */}
+              <button
+                type="button"
+                aria-label="Previous page"
+                className="fixed inset-y-0 left-0 w-[15%] z-30 bg-gradient-to-r from-transparent via-transparent to-transparent"
+                onClick={() => renditionRef.current?.prev()}
+              />
+              <button
+                type="button"
+                aria-label="Next page"
+                className="fixed inset-y-0 right-0 w-[15%] z-30 bg-gradient-to-l from-transparent via-transparent to-transparent"
+                onClick={() => renditionRef.current?.next()}
+              />
+
               {/* Book Card */}
               <div
                 className={
@@ -770,28 +911,12 @@ export default function Home() {
                 {/* Spotlight-style vignette */}
                 <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.12)_0,transparent_45%,rgba(0,0,0,0.8)_85%,rgba(0,0,0,0.98)_100%)]" />
 
-                {/* Tap Zones */}
-                <button
-                  type="button"
-                  aria-label="Previous page"
-                  className="absolute inset-y-0 left-0 w-[20%] z-20 bg-gradient-to-r from-black/20 via-transparent to-transparent opacity-0 hover:opacity-40 transition-opacity md:opacity-0 md:hover:opacity-25"
-                  onClick={() => renditionRef.current?.prev()}
-                />
-                <button
-                  type="button"
-                  aria-label="Next page"
-                  className="absolute inset-y-0 right-0 w-[20%] z-20 bg-gradient-to-l from-black/20 via-transparent to-transparent opacity-0 hover:opacity-40 transition-opacity md:opacity-0 md:hover:opacity-25"
-                  onClick={() => renditionRef.current?.next()}
-                />
-
                 {/* Viewer */}
                 <div
                   ref={viewerRef}
                   className="relative h-[78vh] md:h-[82vh] w-full px-5 sm:px-8 md:px-14 py-10 md:py-14 text-[18px] leading-relaxed transition-opacity duration-500 ease-out opacity-0 overflow-hidden"
                 />
               </div>
-
-              {!isReaderMode && directorInfo && <DirectorSummary info={directorInfo} />}
             </motion.div>
           </AnimatePresence>
         </div>
