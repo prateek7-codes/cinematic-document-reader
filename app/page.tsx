@@ -14,13 +14,18 @@ type ThemeMode = 'cinematic-dark' | 'classic-sepia'
 type DirectorInfo = {
   title: string
   author: string
-  previewText: string
-  logline: string
+  description?: string
 }
 
 type ChapterItem = {
   label: string
   href: string
+}
+
+type Bookmark = {
+  cfi: string
+  chapterTitle: string
+  preview: string
 }
 
 const BOOKMARKS_KEY = 'epub-bookmarks'
@@ -91,15 +96,6 @@ async function loadBookBuffer(): Promise<ArrayBuffer | null> {
   return result
 }
 
-function generateLogline(text: string): string {
-  // Placeholder for AI integration (Gemini / OpenAI)
-  // You can replace this implementation with an API call that returns a 1-sentence movie-style logline.
-  if (!text) return 'Director\'s logline will appear here once generated.'
-
-  const snippet = text.split(/\s+/).slice(0, 40).join(' ')
-  return `A cinematic journey teased by: "${snippet}..." (replace with AI-generated logline)`
-}
-
 function applyThemeStyles(rendition: any, theme: ThemeMode) {
   if (!rendition) return
 
@@ -128,62 +124,18 @@ function applyThemeStyles(rendition: any, theme: ThemeMode) {
         'font-size': '18px',
         'line-height': '1.8',
         'letter-spacing': '0.3px',
-        color: '#3b2f2f',
-        'background-color': '#f4f1ea',
+        color: '#3B2F2F',
+        'background-color': '#F4ECD8',
       },
       p: {
         'margin-bottom': '1.2em',
       },
       a: {
-        color: '#6b4b2f',
+        color: '#8C6B4F',
         'text-decoration': 'none',
       },
     })
   }
-}
-
-function DirectorSummary({ info }: { info: DirectorInfo }) {
-  return (
-    <aside className="w-full md:w-80 lg:w-96 mt-8 md:mt-0 md:ml-8 text-sm text-neutral-100/90">
-      <div className="rounded-2xl border border-white/10 bg-white/5 backdrop-blur-sm p-5 space-y-3">
-        <div className="text-xs uppercase tracking-[0.22em] text-white/70">
-          Director&apos;s Cut
-        </div>
-        <div>
-          <div className="text-[11px] uppercase tracking-[0.18em] text-white/50">
-            Title
-          </div>
-          <div className="mt-1 text-base font-medium text-white">
-            {info.title || 'Unknown Title'}
-          </div>
-        </div>
-        <div>
-          <div className="text-[11px] uppercase tracking-[0.18em] text-white/50">
-            Author
-          </div>
-          <div className="mt-1 text-[13px] text-white/80">
-            {info.author || 'Unknown Author'}
-          </div>
-        </div>
-        <div>
-          <div className="text-[11px] uppercase tracking-[0.18em] text-white/50 mb-1">
-            Movie Pitch
-          </div>
-          <p className="text-[13px] leading-relaxed text-white/90">
-            {info.logline}
-          </p>
-        </div>
-        <div>
-          <div className="text-[11px] uppercase tracking-[0.18em] text-white/50 mb-1">
-            Opening Pages
-          </div>
-          <p className="text-[12px] leading-relaxed text-white/80 line-clamp-[10]">
-            {info.previewText}
-          </p>
-        </div>
-      </div>
-    </aside>
-  )
 }
 
 export default function Home() {
@@ -196,9 +148,11 @@ export default function Home() {
   const keyHandlerRef = useRef<((e: KeyboardEvent) => void) | null>(null)
   const touchStartXRef = useRef<number | null>(null)
   const currentLocationRef = useRef<string | null>(null)
+  const lastLocationRef = useRef<any | null>(null)
 
   const [bookFile, setBookFile] = useState<File | null>(null)
   const [progress, setProgress] = useState(0)
+  const [currentLocation, setCurrentLocation] = useState<string | null>(null)
   const [spreadMode, setSpreadMode] = useState<'none' | 'always'>(() => {
     if (typeof window === 'undefined') return 'none'
     return window.innerWidth >= 768 ? 'always' : 'none'
@@ -210,13 +164,22 @@ export default function Home() {
   })
   const [directorInfo, setDirectorInfo] = useState<DirectorInfo | null>(null)
   const [isReaderMode, setIsReaderMode] = useState(false)
-  const [bookmarks, setBookmarks] = useState<string[]>(() => {
+  const [bookmarks, setBookmarks] = useState<Bookmark[]>(() => {
     if (typeof window === 'undefined') return []
     try {
       const raw = window.localStorage.getItem(BOOKMARKS_KEY)
       if (!raw) return []
       const parsed = JSON.parse(raw)
-      return Array.isArray(parsed) ? parsed : []
+      if (!Array.isArray(parsed)) return []
+      // migrate from old string-only bookmarks if needed
+      if (parsed.length > 0 && typeof parsed[0] === 'string') {
+        return (parsed as string[]).map((cfi) => ({
+          cfi,
+          chapterTitle: 'Bookmark',
+          preview: '',
+        }))
+      }
+      return parsed as Bookmark[]
     } catch {
       return []
     }
@@ -377,33 +340,20 @@ export default function Home() {
           setChapters([])
         }
 
-        // Extract metadata + opening text for DirectorSummary
+        // Extract metadata for Book Info
         try {
           const metadata = await (book.loaded as any).metadata
           const title = metadata?.title || 'Unknown Title'
           const author = metadata?.creator || metadata?.author || 'Unknown Author'
-
-          let previewText = ''
-          const firstSection = (book.spine as any)?.get?.(0)
-          if (firstSection && typeof firstSection.load === 'function') {
-            const doc = await firstSection.load(book.load.bind(book))
-            const textContent =
-              (doc?.documentElement?.textContent as string | null) ||
-              (doc?.body?.textContent as string | null) ||
-              ''
-            const words = textContent.trim().split(/\s+/)
-            previewText = words.slice(0, 500).join(' ')
-
-            if (typeof firstSection.unload === 'function') {
-              firstSection.unload()
-            }
-          }
+          const description =
+            metadata?.description ||
+            metadata?.subtitle ||
+            undefined
 
           setDirectorInfo({
             title,
             author,
-            previewText,
-            logline: generateLogline(previewText || `${title} by ${author}`),
+            description,
           })
         } catch {
           // best-effort only; ignore failures
@@ -422,6 +372,8 @@ export default function Home() {
 
         const cfi = location.start.cfi
         currentLocationRef.current = cfi
+        lastLocationRef.current = location
+        setCurrentLocation(cfi)
         localStorage.setItem("epub-location", cfi)
       })
 
@@ -559,6 +511,9 @@ export default function Home() {
       const next = !prev
       if (next) {
         setShowInfoPanel(false)
+        setIsUiVisible(false)
+      } else {
+        setIsUiVisible(true)
       }
       return next
     })
@@ -580,7 +535,7 @@ export default function Home() {
     }
   }
 
-  const persistBookmarks = (next: string[]) => {
+  const persistBookmarks = (next: Bookmark[]) => {
     setBookmarks(next)
     try {
       window.localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(next))
@@ -589,11 +544,48 @@ export default function Home() {
     }
   }
 
-  const addBookmark = () => {
+  const addBookmark = async () => {
     const cfi = currentLocationRef.current
     if (!cfi) return
-    if (bookmarks.includes(cfi)) return
-    persistBookmarks([...bookmarks, cfi])
+    if (bookmarks.some((b) => b.cfi === cfi)) return
+
+    let chapterTitle = 'Bookmark'
+    let preview = ''
+
+    try {
+      const loc = lastLocationRef.current
+      const href: string | undefined = loc?.start?.href
+      if (href && chapters.length > 0) {
+        const match = chapters.find((ch) =>
+          href.endsWith(ch.href),
+        )
+        if (match) {
+          chapterTitle = match.label
+        }
+      }
+
+      const anyBook = bookRef.current as any
+      if (anyBook && typeof anyBook.getRange === 'function') {
+        const range = await anyBook.getRange(cfi)
+        const text = range?.toString?.() || ''
+        if (text) {
+          const words = text.trim().split(/\s+/)
+          preview = words.slice(0, 18).join(' ')
+        }
+      }
+    } catch {
+      // best-effort; ignore failures
+    }
+
+    const next: Bookmark[] = [
+      ...bookmarks,
+      {
+        cfi,
+        chapterTitle,
+        preview,
+      },
+    ]
+    persistBookmarks(next)
   }
 
   const jumpToBookmark = (cfi: string) => {
@@ -614,9 +606,18 @@ export default function Home() {
     }
   }
 
-  // Ghost UI: hide chrome (toolbar + progress bar) after inactivity
+  // Ghost UI: hide chrome (toolbar + progress bar) after inactivity in Reader Mode
   useEffect(() => {
     if (typeof window === 'undefined') return
+
+    if (!isReaderMode) {
+      setIsUiVisible(true)
+      if (uiHideTimeoutRef.current) {
+        window.clearTimeout(uiHideTimeoutRef.current)
+        uiHideTimeoutRef.current = null
+      }
+      return
+    }
 
     const resetUiTimer = () => {
       setIsUiVisible(true)
@@ -644,15 +645,24 @@ export default function Home() {
     return () => {
       if (uiHideTimeoutRef.current) {
         window.clearTimeout(uiHideTimeoutRef.current)
+        uiHideTimeoutRef.current = null
       }
       events.forEach((evt) => {
         window.removeEventListener(evt, resetUiTimer as any)
       })
     }
-  }, [])
+  }, [isReaderMode])
+
+  const uiChromeVisible = !isReaderMode || isUiVisible
 
   return (
-    <main className="min-h-screen bg-[#050509] bg-[radial-gradient(circle_at_center,_rgba(30,30,40,0.9)_0,_#050509_55%,_#000_100%)] text-white">
+    <main
+      className={
+        theme === 'cinematic-dark'
+          ? 'min-h-screen bg-[#050509] bg-[radial-gradient(circle_at_center,_rgba(30,30,40,0.9)_0,_#050509_55%,_#000_100%)] text-white'
+          : 'min-h-screen bg-[#1c1913] bg-[radial-gradient(circle_at_center,_rgba(244,236,216,0.6)_0,_#1c1913_60%,_#000_100%)] text-[#3B2F2F]'
+      }
+    >
       {!bookFile ? (
         <div className="flex items-center justify-center min-h-screen">
           <div className="w-[420px] rounded-3xl bg-white shadow-xl p-10 text-center">
@@ -685,7 +695,7 @@ export default function Home() {
           {/* Global progress bar at the very bottom */}
           <div
             className={`fixed bottom-0 left-0 w-full h-[2px] bg-black/70 backdrop-blur-sm z-40 transition-opacity duration-500 ${
-              isUiVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
+              uiChromeVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
             }`}
           >
             <div
@@ -697,7 +707,7 @@ export default function Home() {
           {/* Unified floating toolbar */}
           <div
             className={`fixed top-4 right-4 z-50 transition-opacity duration-500 ${
-              isUiVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
+              uiChromeVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
             }`}
           >
             <div className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-black/60/75 px-4 py-2 text-[10px] uppercase tracking-[0.18em] text-white/80 backdrop-blur-2xl shadow-[0_18px_45px_rgba(0,0,0,0.85)]">
@@ -742,20 +752,31 @@ export default function Home() {
               >
                 Info
               </button>
+              <span className="h-4 w-px bg-white/15" />
+              <button
+                type="button"
+                onClick={handleClick}
+                className="px-2 py-1 rounded-full bg-white/5 hover:bg-white/10 transition"
+              >
+                Change Book
+              </button>
             </div>
           </div>
 
           {/* Chapters & Bookmarks pill */}
-          <button
-            type="button"
-            onClick={() => setShowBookmarksPanel((prev) => !prev)}
-            className="fixed left-4 bottom-6 z-40 rounded-full border border-white/20 bg-black/70 px-4 py-2 text-[11px] font-medium uppercase tracking-[0.18em] text-white/80 backdrop-blur-xl shadow-[0_18px_45px_rgba(0,0,0,0.65)] hover:bg-white/10 transition"
-          >
-            Chapters &amp; Bookmarks
-          </button>
+          {!isReaderMode && (
+            <button
+              type="button"
+              onClick={() => setShowBookmarksPanel((prev) => !prev)}
+              className="fixed left-4 bottom-6 z-40 rounded-full border border-white/20 bg-black/70 px-4 py-2 text-[11px] font-medium uppercase tracking-[0.18em] text-white/80 backdrop-blur-xl shadow-[0_18px_45px_rgba(0,0,0,0.65)] hover:bg-white/10 transition"
+            >
+              Chapters &amp; Bookmarks
+            </button>
+          )
+          }
 
           {/* Chapters & Bookmarks overlay */}
-          {showBookmarksPanel && (
+          {showBookmarksPanel && !isReaderMode && (
             <div className="fixed inset-x-4 bottom-16 md:inset-auto md:right-6 md:bottom-20 md:w-80 z-40 rounded-2xl border border-white/15 bg-black/80 backdrop-blur-2xl p-4 text-xs shadow-[0_30px_80px_rgba(0,0,0,0.85)] space-y-3">
               <div className="flex items-center justify-between">
                 <span className="uppercase tracking-[0.21em] text-white/60">
@@ -803,12 +824,19 @@ export default function Home() {
                   )}
                   {bookmarks.map((bm, idx) => (
                     <button
-                      key={bm}
+                      key={bm.cfi}
                       type="button"
-                      onClick={() => jumpToBookmark(bm)}
+                      onClick={() => jumpToBookmark(bm.cfi)}
                       className="block w-full text-left rounded-md px-2 py-1 text-[11px] text-white/80 hover:bg-white/10"
                     >
-                      Bookmark {idx + 1}
+                      <div className="font-medium text-[11px]">
+                        {bm.chapterTitle || `Bookmark ${idx + 1}`}
+                      </div>
+                      {bm.preview && (
+                        <div className="text-[10px] text-white/65 line-clamp-2">
+                          {bm.preview}
+                        </div>
+                      )}
                     </button>
                   ))}
                 </div>
@@ -816,7 +844,7 @@ export default function Home() {
             </div>
           )}
 
-          {/* Director's Cut slide-out drawer */}
+          {/* Book Info slide-out drawer */}
           <AnimatePresence>
             {showInfoPanel && !isReaderMode && directorInfo && (
               <motion.aside
@@ -828,7 +856,7 @@ export default function Home() {
               >
                 <div className="flex items-center justify-between mb-3">
                   <div className="text-xs uppercase tracking-[0.22em] text-white/70">
-                    Director&apos;s Cut
+                    Book Info
                   </div>
                   <button
                     type="button"
@@ -855,21 +883,35 @@ export default function Home() {
                       {directorInfo.author || 'Unknown Author'}
                     </div>
                   </div>
+                  {directorInfo.description && (
+                    <div>
+                      <div className="text-[11px] uppercase tracking-[0.18em] text-white/50 mb-1">
+                        Description
+                      </div>
+                      <p className="text-[12px] leading-relaxed text-white/80">
+                        {directorInfo.description}
+                      </p>
+                    </div>
+                  )}
                   <div>
                     <div className="text-[11px] uppercase tracking-[0.18em] text-white/50 mb-1">
-                      Movie Pitch
+                      Table of Contents
                     </div>
-                    <p className="text-[13px] leading-relaxed text-white/90 italic font-serif">
-                      {directorInfo.logline}
-                    </p>
-                  </div>
-                  <div>
-                    <div className="text-[11px] uppercase tracking-[0.18em] text-white/50 mb-1">
-                      Opening Pages
+                    <div className="max-h-36 overflow-y-auto space-y-1 pr-1">
+                      {chapters.length === 0 && (
+                        <div className="text-white/40 italic">No chapter data</div>
+                      )}
+                      {chapters.map((ch) => (
+                        <button
+                          key={`info-${ch.href}`}
+                          type="button"
+                          onClick={() => jumpToChapter(ch.href)}
+                          className="block w-full text-left rounded-md px-2 py-1 text-[11px] text-white/80 hover:bg-white/10"
+                        >
+                          {ch.label}
+                        </button>
+                      ))}
                     </div>
-                    <p className="text-[12px] leading-relaxed text-white/80 line-clamp-[10]">
-                      {directorInfo.previewText}
-                    </p>
                   </div>
                 </div>
               </motion.aside>
@@ -878,7 +920,7 @@ export default function Home() {
 
           <AnimatePresence mode="wait">
             <motion.div
-              key={bookFile ? 'reader-loaded' : 'reader-empty'}
+              key={currentLocation || (bookFile ? 'reader-loaded' : 'reader-empty')}
               ref={readerShellRef}
               initial={{ opacity: 0, y: 16 }}
               animate={{ opacity: 1, y: 0 }}
@@ -886,17 +928,17 @@ export default function Home() {
               transition={{ duration: 0.8, ease: 'easeOut' }}
               className="relative w-full max-w-6xl flex flex-col md:flex-row items-stretch justify-center md:items-start md:justify-between gap-6 md:gap-10"
             >
-              {/* Full-screen tap zones for navigation */}
+              {/* Full-screen tap zones for navigation (mouse + touch) */}
               <button
                 type="button"
                 aria-label="Previous page"
-                className="fixed inset-y-0 left-0 w-[15%] z-30 bg-gradient-to-r from-transparent via-transparent to-transparent"
+                className="fixed inset-y-0 left-0 w-[20%] z-30 bg-transparent"
                 onClick={() => renditionRef.current?.prev()}
               />
               <button
                 type="button"
                 aria-label="Next page"
-                className="fixed inset-y-0 right-0 w-[15%] z-30 bg-gradient-to-l from-transparent via-transparent to-transparent"
+                className="fixed inset-y-0 right-0 w-[20%] z-30 bg-transparent"
                 onClick={() => renditionRef.current?.next()}
               />
 
@@ -911,9 +953,13 @@ export default function Home() {
                 {/* Spotlight-style vignette */}
                 <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.12)_0,transparent_45%,rgba(0,0,0,0.8)_85%,rgba(0,0,0,0.98)_100%)]" />
 
-                {/* Viewer */}
-                <div
+                {/* Viewer with subtle page fade */}
+                <motion.div
                   ref={viewerRef}
+                  key={currentLocation || 'initial'}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ duration: 0.3, ease: 'easeOut' }}
                   className="relative h-[78vh] md:h-[82vh] w-full px-5 sm:px-8 md:px-14 py-10 md:py-14 text-[18px] leading-relaxed transition-opacity duration-500 ease-out opacity-0 overflow-hidden"
                 />
               </div>
