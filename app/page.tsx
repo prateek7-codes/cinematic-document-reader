@@ -698,13 +698,13 @@ export default function Home() {
             <button
               type="button"
               aria-label="Previous page"
-              className="fixed inset-y-0 left-0 w-[20%] z-30 bg-transparent"
+              className="fixed inset-y-0 left-0 w-[20%] z-[40] bg-transparent pointer-events-auto"
               onClick={() => renditionRef.current?.prev()}
             />
             <button
               type="button"
               aria-label="Next page"
-              className="fixed inset-y-0 right-0 w-[20%] z-30 bg-transparent"
+              className="fixed inset-y-0 right-0 w-[20%] z-[40] bg-transparent pointer-events-auto"
               onClick={() => renditionRef.current?.next()}
             />
 
@@ -720,25 +720,22 @@ export default function Home() {
               <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.12)_0,transparent_45%,rgba(0,0,0,0.8)_85%,rgba(0,0,0,0.98)_100%)]" />
 
               {/* Viewer - ALWAYS VISIBLE */}
-              <motion.div
+              <div
                 ref={viewerRef}
                 key={currentLocation || 'initial'}
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                transition={{ duration: 0.3, ease: 'easeOut' }}
-                className="relative h-[78vh] md:h-[82vh] w-full px-5 sm:px-8 md:px-14 py-10 md:py-14 text-[18px] leading-relaxed overflow-hidden"
+                className="relative h-[78vh] md:h-[82vh] w-full px-5 sm:px-8 md:px-14 py-10 md:py-14 text-[18px] leading-relaxed overflow-hidden opacity-100"
               />
             </div>
           </div>
 
           {/* UI Elements Wrapper - CONDITIONAL VISIBILITY */}
           <div
-            className={`absolute inset-0 pointer-events-none transition-opacity duration-500 ${
+            className={`absolute inset-0 pointer-events-none transition-opacity duration-500 z-50 ${
               uiChromeVisible ? 'opacity-100' : 'opacity-0'
             }`}
           >
             {/* Global progress bar at the very bottom */}
-            <div className="fixed bottom-0 left-0 w-full h-[3px] bg-black/80 backdrop-blur-md z-40 pointer-events-auto">
+            <div className="fixed bottom-0 left-0 w-full h-[3px] bg-black/80 backdrop-blur-md z-[60] pointer-events-auto">
               <div
                 className="h-full bg-gradient-to-r from-emerald-400 via-sky-400 to-violet-500 shadow-[0_0_20px_rgba(56,189,248,0.9),_0_0_40px_rgba(56,189,248,0.4)] transition-all duration-300 ease-out"
                 style={{ width: `${progress}%` }}
