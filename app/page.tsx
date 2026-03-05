@@ -182,37 +182,11 @@ export default function Home() {
   const [bookFile, setBookFile] = useState<File | null>(null)
   const [progress, setProgress] = useState(0)
   const [currentLocation, setCurrentLocation] = useState<string | null>(null)
-  const [spreadMode, setSpreadMode] = useState<'none' | 'always' | 'auto'>(() => {
-    if (typeof window === 'undefined') return 'none'
-    return window.innerWidth >= 768 ? 'auto' : 'none'
-  })
-  const [theme, setTheme] = useState<ThemeMode>(() => {
-    if (typeof window === 'undefined') return 'cinematic-dark'
-    const stored = window.localStorage.getItem('reader-theme') as ThemeMode | null
-    return stored || 'cinematic-dark'
-  })
+  const [spreadMode, setSpreadMode] = useState<'none' | 'always' | 'auto'>('none')
+  const [theme, setTheme] = useState<ThemeMode>('cinematic-dark')
   const [bookInfo, setBookInfo] = useState<BookInfo | null>(null)
   const [isReaderMode, setIsReaderMode] = useState(false)
-  const [bookmarks, setBookmarks] = useState<Bookmark[]>(() => {
-    if (typeof window === 'undefined') return []
-    try {
-      const raw = window.localStorage.getItem(BOOKMARKS_KEY)
-      if (!raw) return []
-      const parsed = JSON.parse(raw)
-      if (!Array.isArray(parsed)) return []
-      // migrate from old string-only bookmarks if needed
-      if (parsed.length > 0 && typeof parsed[0] === 'string') {
-        return (parsed as string[]).map((cfi) => ({
-          cfi,
-          chapterTitle: 'Bookmark',
-          preview: '',
-        }))
-      }
-      return parsed as Bookmark[]
-    } catch {
-      return []
-    }
-  })
+  const [bookmarks, setBookmarks] = useState<Bookmark[]>([])
   const [chapters, setChapters] = useState<ChapterItem[]>([])
   const [showBookmarksPanel, setShowBookmarksPanel] = useState(false)
   const [showInfoPanel, setShowInfoPanel] = useState(false)
@@ -261,6 +235,10 @@ export default function Home() {
     if (!file) return
   
     cleanupRendition()
+  
+    // reset refs
+    bookRef.current = null
+    renditionRef.current = null
   
     // reset previous reading location and UI state
     localStorage.removeItem("epub-location")
@@ -319,6 +297,43 @@ export default function Home() {
 
     return () => {
       cancelled = true
+    }
+  }, []);
+
+  // Load saved theme from localStorage after mount
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const stored = window.localStorage.getItem('reader-theme') as ThemeMode | null
+      if (stored && (stored === 'cinematic-dark' || stored === 'classic-sepia')) {
+        setTheme(stored)
+      }
+    }
+  }, []);
+
+  // Load bookmarks from localStorage after mount
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const raw = window.localStorage.getItem(BOOKMARKS_KEY)
+        if (!raw) return
+        const parsed = JSON.parse(raw)
+        if (!Array.isArray(parsed)) return
+        // migrate from old string-only bookmarks if needed
+        if (parsed.length > 0 && typeof parsed[0] === 'string') {
+          setBookmarks([])
+        } else {
+          setBookmarks(parsed as Bookmark[])
+        }
+      } catch {
+        setBookmarks([])
+      }
+    }
+  }, []);
+
+  // Set spreadMode based on screen size after mount
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      setSpreadMode(window.innerWidth >= 768 ? 'auto' : 'none')
     }
   }, []);
 
@@ -383,7 +398,7 @@ export default function Home() {
 
         // Capture chapters/TOC from book.loaded.navigation
         try {
-          const nav = (book.loaded as any).navigation
+          const nav = await book.loaded.navigation
           const toc = (nav && Array.isArray(nav.toc) ? nav.toc : []) as any[]
           const mapped: ChapterItem[] = toc
             .filter((item) => item && item.href)
@@ -418,16 +433,12 @@ export default function Home() {
 
       rendition.on("rendered", () => {
         if (!cancelled) {
-          // Fix iframe sandbox to allow scripts with minimal permissions
-          const iframe = viewerRef.current?.querySelector('iframe')
-          if (iframe) {
-            iframe.setAttribute('sandbox', 'allow-same-origin allow-scripts')
-          }
+          // EPUB content rendered successfully
         }
       })
 
       rendition.on("relocated", (location: EpubLocation) => {
-        const percent = location.start.percentage || 0
+        const percent = location?.start?.percentage ?? 0
         setProgress(Math.floor(percent * 100))
 
         const cfi = location.start.cfi
@@ -732,43 +743,10 @@ export default function Home() {
 
   const uiChromeVisible = !isReaderMode || isUiVisible
 
-  // Monitor and fix iframe sandbox permissions
-  useEffect(() => {
-    if (!viewerRef.current) return
-
-    const checkAndFixIframe = () => {
-      const iframe = viewerRef.current?.querySelector('iframe')
-      if (iframe && iframe.getAttribute('sandbox') !== 'allow-same-origin allow-scripts') {
-        iframe.setAttribute('sandbox', 'allow-same-origin allow-scripts')
-        console.log('Fixed iframe sandbox permissions for EPUB rendering')
-      }
-    }
-
-    // Check immediately
-    checkAndFixIframe()
-
-    // Set up mutation observer to catch dynamically created iframes
-    const observer = new MutationObserver((mutations) => {
-      mutations.forEach((mutation) => {
-        if (mutation.type === 'childList') {
-          mutation.addedNodes.forEach((node) => {
-            if (node.nodeName === 'IFRAME') {
-              const iframe = node as HTMLIFrameElement
-              iframe.setAttribute('sandbox', 'allow-same-origin allow-scripts')
-              console.log('Fixed dynamically created iframe sandbox permissions')
-            }
-          })
-        }
-      })
-    })
-
-    observer.observe(viewerRef.current, { childList: true, subtree: true })
-
-    return () => observer.disconnect()
-  }, [bookFile])
-
+  
   return (
     <main
+      ref={readerShellRef}
       className={
         theme === 'cinematic-dark'
           ? 'min-h-screen bg-[#050509] bg-[radial-gradient(circle_at_center,_rgba(30,30,40,0.9)_0,_#050509_55%,_#000_100%)] text-white'
@@ -813,16 +791,23 @@ export default function Home() {
                   ? 'relative flex-1 min-w-0 bg-[#050509] rounded-3xl shadow-[0_60px_160px_rgba(0,0,0,1)] border border-white/10'
                   : 'relative flex-1 min-w-0 bg-[#F4ECD8] rounded-3xl shadow-[0_60px_160px_rgba(0,0,0,0.2)] border border-[#3B2F2F]/20'
               }
-              style={{ minHeight: '78vh', height: '82vh' }}
+              style={{ minHeight: '78vh', maxHeight: '85vh' }}
             >
               {/* Spotlight-style vignette */}
-              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.12)_0,transparent_45%,rgba(0,0,0,0.8)_85%,rgba(0,0,0,0.98)_100%)]" />
+              <div 
+                className="pointer-events-none absolute inset-0 z-0"
+                style={{
+                  background: theme === 'cinematic-dark'
+                    ? 'radial-gradient(circle_at_center,rgba(255,255,255,0.12)_0,transparent_45%,rgba(0,0,0,0.7)_85%,rgba(0,0,0,0.9)_100%)'
+                    : 'radial-gradient(circle_at_center,rgba(0,0,0,0.05)_0,transparent_50%,rgba(0,0,0,0.15)_90%)'
+                }}
+              />
 
               {/* Navigation tap zones - only cover reading area */}
               <button
                 type="button"
                 aria-label="Previous page"
-                className="absolute inset-y-0 left-0 w-[20%] z-[40] bg-transparent pointer-events-auto"
+                className="absolute inset-y-0 left-0 w-[20%] z-10 bg-transparent pointer-events-auto"
                 onClick={() => renditionRef.current?.prev()}
                 onTouchEnd={(e) => {
                   e.preventDefault()
@@ -832,7 +817,7 @@ export default function Home() {
               <button
                 type="button"
                 aria-label="Next page"
-                className="absolute inset-y-0 right-0 w-[20%] z-[40] bg-transparent pointer-events-auto"
+                className="absolute inset-y-0 right-0 w-[20%] z-10 bg-transparent pointer-events-auto"
                 onClick={() => renditionRef.current?.next()}
                 onTouchEnd={(e) => {
                   e.preventDefault()
@@ -844,8 +829,13 @@ export default function Home() {
               <div
                 ref={viewerRef}
                 key={currentLocation || 'initial'}
-                className="relative min-h-[600px] h-[78vh] md:h-[82vh] w-full px-5 sm:px-8 md:px-14 py-10 md:py-14 text-[18px] leading-relaxed overflow-hidden opacity-100"
-                style={{ minHeight: '600px', minWidth: '100%' }}
+                className="relative z-20 min-h-[600px] h-full w-full overflow-hidden opacity-100"
+                style={{ 
+                  minHeight: '600px', 
+                  minWidth: '100%',
+                  width: '100%',
+                  height: '100%'
+                }}
               />
             </div>
           </div>
@@ -859,7 +849,7 @@ export default function Home() {
             }`}
           >
             {/* Subtle progress indicator */}
-            <div className="fixed bottom-0 left-0 w-full h-[2px] bg-white/10 z-[60] pointer-events-auto">
+            <div className="fixed bottom-0 left-0 w-full h-[2px] bg-white/30 z-[60] pointer-events-auto">
               <div
                 className="h-full bg-white/60 transition-all duration-300 ease-out"
                 style={{ width: `${progress}%` }}
