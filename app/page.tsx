@@ -96,7 +96,7 @@ async function loadBookBuffer(): Promise<ArrayBuffer | null> {
   return result
 }
 
-function applyThemeStyles(rendition: any, theme: ThemeMode) {
+function applyThemeStyles(rendition: EpubRendition, theme: ThemeMode) {
   if (!rendition) return
 
   if (theme === 'cinematic-dark') {
@@ -138,17 +138,45 @@ function applyThemeStyles(rendition: any, theme: ThemeMode) {
   }
 }
 
+interface EpubBook {
+  loaded: any
+  navigation: any
+  spine: any
+  destroy(): void
+  getRange(cfi: string): Promise<any>
+}
+
+interface EpubRendition {
+  display(location?: string): Promise<void>
+  next(): void
+  prev(): void
+  spread(mode: string): void
+  on(event: string, callback: Function): void
+  destroy(): void
+  themes: {
+    default(styles: any): void
+  }
+}
+
+interface EpubLocation {
+  start: {
+    cfi: string
+    href: string
+    percentage: number
+  }
+}
+
 export default function Home() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const viewerRef = useRef<HTMLDivElement>(null)
   const readerShellRef = useRef<HTMLDivElement>(null)
 
-  const bookRef = useRef<any | null>(null)
-  const renditionRef = useRef<any | null>(null)
+  const bookRef = useRef<EpubBook | null>(null)
+  const renditionRef = useRef<EpubRendition | null>(null)
   const keyHandlerRef = useRef<((e: KeyboardEvent) => void) | null>(null)
   const touchStartXRef = useRef<number | null>(null)
   const currentLocationRef = useRef<string | null>(null)
-  const lastLocationRef = useRef<any | null>(null)
+  const lastLocationRef = useRef<EpubLocation | null>(null)
 
   const [bookFile, setBookFile] = useState<File | null>(null)
   const [progress, setProgress] = useState(0)
@@ -189,6 +217,7 @@ export default function Home() {
   const [showInfoPanel, setShowInfoPanel] = useState(false)
   const [isUiVisible, setIsUiVisible] = useState(true)
   const uiHideTimeoutRef = useRef<number | null>(null)
+  const prevReaderModeRef = useRef(false)
 
   const cleanupRendition = useCallback(() => {
     if (keyHandlerRef.current) {
@@ -221,7 +250,7 @@ export default function Home() {
 
     currentLocationRef.current = null
     setProgress(0)
-  }, [])
+  }, []);
 
   const handleClick = () => {
     fileInputRef.current?.click()
@@ -263,7 +292,19 @@ export default function Home() {
     const restoreBook = async () => {
       try {
         const buffer = await loadBookBuffer()
-        if (!buffer || cancelled) return
+        console.log('Restored book buffer size:', buffer?.byteLength || 'undefined')
+        
+        if (!buffer || cancelled) {
+          if (!buffer && !cancelled) {
+            console.log('No saved book found in IndexedDB')
+          }
+          return
+        }
+
+        if (buffer.byteLength === 0) {
+          console.error('Restored book buffer is empty')
+          return
+        }
 
         const file = new File([buffer], 'saved.epub', {
           type: 'application/epub+zip',
@@ -279,7 +320,7 @@ export default function Home() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, []);
 
   useEffect(() => {
     if (!bookFile || !viewerRef.current) return
@@ -291,6 +332,18 @@ export default function Home() {
       if (cancelled) return
 
       const arrayBuffer = e.target?.result as ArrayBuffer
+      
+      // Debug: Check ArrayBuffer data
+      console.log('EPUB ArrayBuffer size:', arrayBuffer?.byteLength || 'undefined')
+      if (!arrayBuffer || arrayBuffer.byteLength === 0) {
+        console.error('EPUB ArrayBuffer is empty or undefined')
+        setDirectorInfo({
+          title: 'Error Loading Book',
+          author: 'Unknown',
+          description: 'The EPUB file could not be loaded. Please try uploading it again.'
+        })
+        return
+      }
 
       const book = ePub(arrayBuffer)
       bookRef.current = book
@@ -299,16 +352,18 @@ export default function Home() {
         typeof window !== 'undefined' && window.innerWidth < 768
       const effectiveSpread = isMobile ? 'none' : spreadMode
 
-      const rendition = book.renderTo(viewerRef.current!, {
-        width: '100%',
-        height: '100%',
-        flow: 'paginated',
-        spread: effectiveSpread,
-        snap: true,
-      })
-      renditionRef.current = rendition
+      try {
+        const rendition = book.renderTo(viewerRef.current!, {
+          width: '100%',
+          height: '100%',
+          flow: 'paginated',
+          spread: effectiveSpread,
+          snap: true,
+          allowScriptedContent: true,
+        })
+        renditionRef.current = rendition
 
-      book.ready.then(async () => {
+        book.ready.then(async () => {
         if (cancelled) return
 
         const savedLocation = localStorage.getItem("epub-location")
@@ -363,10 +418,16 @@ export default function Home() {
       rendition.on("rendered", () => {
         if (!cancelled) {
           viewerRef.current?.classList.add("opacity-100")
+          
+          // Fix iframe sandbox to allow scripts
+          const iframe = viewerRef.current?.querySelector('iframe')
+          if (iframe) {
+            iframe.setAttribute('sandbox', 'allow-same-origin allow-scripts allow-forms allow-popups allow-modals')
+          }
         }
       })
 
-      rendition.on("relocated", (location: any) => {
+      rendition.on("relocated", (location: EpubLocation) => {
         const percent = location.start.percentage || 0
         setProgress(Math.floor(percent * 100))
 
@@ -464,16 +525,23 @@ export default function Home() {
           originalDestroy()
         }
       }
+    } catch (err) {
+      console.error('Failed to create rendition or load book:', err)
+      setDirectorInfo({
+        title: 'Error Loading Book',
+        author: 'Unknown',
+        description: 'The EPUB file could not be rendered. Please check if the file is a valid EPUB format.'
+      })
     }
+  }
 
-    reader.readAsArrayBuffer(bookFile)
+    reader.readAsArrayBuffer(bookFile);
 
     return () => {
       cancelled = true
       cleanupRendition()
     }
-
-  }, [bookFile, cleanupRendition, theme])
+  }, [bookFile, cleanupRendition, theme, spreadMode]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -481,7 +549,7 @@ export default function Home() {
     if (renditionRef.current) {
       applyThemeStyles(renditionRef.current, theme)
     }
-  }, [theme])
+  }, [theme]);
 
   const toggleTheme = () => {
     setTheme((prev) =>
@@ -610,8 +678,14 @@ export default function Home() {
   useEffect(() => {
     if (typeof window === 'undefined') return
 
+    const prevReaderMode = prevReaderModeRef.current
+    const readerModeChanged = prevReaderMode !== isReaderMode
+    prevReaderModeRef.current = isReaderMode
+
     if (!isReaderMode) {
-      setIsUiVisible(true)
+      if (readerModeChanged) {
+        setTimeout(() => setIsUiVisible(true), 0)
+      }
       if (uiHideTimeoutRef.current) {
         window.clearTimeout(uiHideTimeoutRef.current)
         uiHideTimeoutRef.current = null
@@ -651,7 +725,7 @@ export default function Home() {
         window.removeEventListener(evt, resetUiTimer as any)
       })
     }
-  }, [isReaderMode])
+  }, [isReaderMode]);
 
   const uiChromeVisible = !isReaderMode || isUiVisible
 
@@ -712,9 +786,10 @@ export default function Home() {
             <div
               className={
                 theme === 'cinematic-dark'
-                  ? 'relative flex-1 min-w-0 bg-[#050509] rounded-3xl shadow-[0_60px_160px_rgba(0,0,0,1)] overflow-hidden border border-white/10'
-                  : 'relative flex-1 min-w-0 bg-[#f4f1ea] rounded-3xl shadow-[0_60px_160px_rgba(0,0,0,0.9)] overflow-hidden border border-black/5'
+                  ? 'relative flex-1 min-w-0 bg-[#050509] rounded-3xl shadow-[0_60px_160px_rgba(0,0,0,1)] border border-white/10'
+                  : 'relative flex-1 min-w-0 bg-[#f4f1ea] rounded-3xl shadow-[0_60px_160px_rgba(0,0,0,0.9)] border border-black/5'
               }
+              style={{ minHeight: '78vh', height: '82vh' }}
             >
               {/* Spotlight-style vignette */}
               <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.12)_0,transparent_45%,rgba(0,0,0,0.8)_85%,rgba(0,0,0,0.98)_100%)]" />
