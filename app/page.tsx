@@ -1,14 +1,119 @@
 'use client'
 
-import { useRef, useState, useEffect } from 'react'
+import { useRef, useState, useEffect, useCallback } from 'react'
 import ePub from 'epubjs'
+
+const DB_NAME = 'cinematic-epub-db'
+const DB_VERSION = 1
+const STORE_NAME = 'books'
+const CURRENT_BOOK_KEY = 'current-book'
+
+const isBrowser = () =>
+  typeof window !== 'undefined' && typeof window.indexedDB !== 'undefined'
+
+function openBookDB(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    if (!isBrowser()) {
+      reject(new Error('IndexedDB is not available'))
+      return
+    }
+
+    const request = window.indexedDB.open(DB_NAME, DB_VERSION)
+
+    request.onupgradeneeded = () => {
+      const db = request.result
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        db.createObjectStore(STORE_NAME)
+      }
+    }
+
+    request.onsuccess = () => {
+      resolve(request.result)
+    }
+
+    request.onerror = () => {
+      reject(request.error || new Error('Failed to open IndexedDB'))
+    }
+  })
+}
+
+async function saveBookBuffer(buffer: ArrayBuffer) {
+  if (!isBrowser()) return
+  const db = await openBookDB()
+
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite')
+    const store = tx.objectStore(STORE_NAME)
+    const req = store.put(buffer, CURRENT_BOOK_KEY)
+
+    req.onsuccess = () => resolve()
+    req.onerror = () =>
+      reject(req.error || new Error('Failed to save book to IndexedDB'))
+  })
+
+  db.close()
+}
+
+async function loadBookBuffer(): Promise<ArrayBuffer | null> {
+  if (!isBrowser()) return null
+  const db = await openBookDB()
+
+  const result = await new Promise<ArrayBuffer | null>((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readonly')
+    const store = tx.objectStore(STORE_NAME)
+    const req = store.get(CURRENT_BOOK_KEY)
+
+    req.onsuccess = () => {
+      resolve((req.result as ArrayBuffer) || null)
+    }
+    req.onerror = () =>
+      reject(req.error || new Error('Failed to load book from IndexedDB'))
+  })
+
+  db.close()
+  return result
+}
 
 export default function Home() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const viewerRef = useRef<HTMLDivElement>(null)
 
+  const bookRef = useRef<any | null>(null)
+  const renditionRef = useRef<any | null>(null)
+  const keyHandlerRef = useRef<((e: KeyboardEvent) => void) | null>(null)
+
   const [bookFile, setBookFile] = useState<File | null>(null)
   const [progress, setProgress] = useState(0)
+
+  const cleanupRendition = useCallback(() => {
+    if (keyHandlerRef.current) {
+      document.removeEventListener('keydown', keyHandlerRef.current)
+      keyHandlerRef.current = null
+    }
+
+    if (renditionRef.current) {
+      try {
+        renditionRef.current.destroy()
+      } catch {
+        // ignore
+      }
+      renditionRef.current = null
+    }
+
+    if (bookRef.current) {
+      try {
+        bookRef.current.destroy()
+      } catch {
+        // ignore
+      }
+      bookRef.current = null
+    }
+
+    if (viewerRef.current) {
+      viewerRef.current.innerHTML = ''
+      viewerRef.current.classList.remove('opacity-100')
+    }
+  }, [])
 
   const handleClick = () => {
     fileInputRef.current?.click()
@@ -17,26 +122,44 @@ export default function Home() {
   const handleFile = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     if (!file) return
+
+     cleanupRendition()
+
     setBookFile(file)
 
-const reader = new FileReader()
-reader.onload = () => {
-  const base64 = reader.result as string
-  localStorage.setItem("epub-file", base64)
-}
-reader.readAsDataURL(file)
+    const reader = new FileReader()
+    reader.onload = async () => {
+      const buffer = reader.result as ArrayBuffer
+      try {
+        await saveBookBuffer(buffer)
+      } catch (err) {
+        console.error('Failed to persist book in IndexedDB', err)
+      }
+    }
+    reader.readAsArrayBuffer(file)
   }
   
   useEffect(() => {
-    const savedFile = localStorage.getItem("epub-file")
-  
-    if (savedFile) {
-      fetch(savedFile)
-        .then(res => res.arrayBuffer())
-        .then(buffer => {
-          const file = new File([buffer], "saved.epub")
-          setBookFile(file)
+    let cancelled = false
+
+    const restoreBook = async () => {
+      try {
+        const buffer = await loadBookBuffer()
+        if (!buffer || cancelled) return
+
+        const file = new File([buffer], 'saved.epub', {
+          type: 'application/epub+zip',
         })
+        setBookFile(file)
+      } catch (err) {
+        console.error('Failed to restore book from IndexedDB', err)
+      }
+    }
+
+    restoreBook()
+
+    return () => {
+      cancelled = true
     }
   }, [])
 
@@ -49,6 +172,7 @@ reader.readAsDataURL(file)
       const arrayBuffer = e.target?.result as ArrayBuffer
 
       const book = ePub(arrayBuffer)
+      bookRef.current = book
 
       const rendition = book.renderTo(viewerRef.current!, {
         width: '100%',
@@ -57,6 +181,7 @@ reader.readAsDataURL(file)
         spread: 'auto',
         snap: true,
       })
+      renditionRef.current = rendition
 
       book.ready.then(() => {
         const savedLocation = localStorage.getItem("epub-location")
@@ -92,7 +217,7 @@ if (savedLocation) {
       rendition.on("relocated", (location: any) => {
         const percent = location.start.percentage || 0
         setProgress(Math.floor(percent * 100))
-      
+
         const cfi = location.start.cfi
         localStorage.setItem("epub-location", cfi)
       })
@@ -102,20 +227,17 @@ if (savedLocation) {
         if (e.key === "ArrowLeft") rendition.prev()
       }
 
+      keyHandlerRef.current = handleKey
       document.addEventListener("keydown", handleKey)
-
-      return () => {
-        document.removeEventListener("keydown", handleKey)
-      }
     }
 
     reader.readAsArrayBuffer(bookFile)
 
     return () => {
-      if (viewerRef.current) viewerRef.current.innerHTML = ''
+      cleanupRendition()
     }
 
-  }, [bookFile])
+  }, [bookFile, cleanupRendition])
 
   return (
     <main className="min-h-screen bg-neutral-100">
