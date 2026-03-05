@@ -11,7 +11,7 @@ const CURRENT_BOOK_KEY = 'current-book'
 
 type ThemeMode = 'cinematic-dark' | 'classic-sepia'
 
-type DirectorInfo = {
+type BookInfo = {
   title: string
   author: string
   description?: string
@@ -153,6 +153,7 @@ interface EpubRendition {
   spread(mode: string): void
   on(event: string, callback: Function): void
   destroy(): void
+  currentLocation(): any
   themes: {
     default(styles: any): void
   }
@@ -181,16 +182,16 @@ export default function Home() {
   const [bookFile, setBookFile] = useState<File | null>(null)
   const [progress, setProgress] = useState(0)
   const [currentLocation, setCurrentLocation] = useState<string | null>(null)
-  const [spreadMode, setSpreadMode] = useState<'none' | 'always'>(() => {
+  const [spreadMode, setSpreadMode] = useState<'none' | 'always' | 'auto'>(() => {
     if (typeof window === 'undefined') return 'none'
-    return window.innerWidth >= 768 ? 'always' : 'none'
+    return window.innerWidth >= 768 ? 'auto' : 'none'
   })
   const [theme, setTheme] = useState<ThemeMode>(() => {
     if (typeof window === 'undefined') return 'cinematic-dark'
     const stored = window.localStorage.getItem('reader-theme') as ThemeMode | null
     return stored || 'cinematic-dark'
   })
-  const [directorInfo, setDirectorInfo] = useState<DirectorInfo | null>(null)
+  const [bookInfo, setBookInfo] = useState<BookInfo | null>(null)
   const [isReaderMode, setIsReaderMode] = useState(false)
   const [bookmarks, setBookmarks] = useState<Bookmark[]>(() => {
     if (typeof window === 'undefined') return []
@@ -245,7 +246,6 @@ export default function Home() {
 
     if (viewerRef.current) {
       viewerRef.current.innerHTML = ''
-      viewerRef.current.classList.remove('opacity-100')
     }
 
     currentLocationRef.current = null
@@ -268,7 +268,7 @@ export default function Home() {
     setBookmarks([])
     setChapters([])
     window.localStorage.removeItem(BOOKMARKS_KEY)
-    setDirectorInfo(null)
+    setBookInfo(null)
     setBookFile(file)
   
     // save EPUB to IndexedDB
@@ -337,7 +337,7 @@ export default function Home() {
       console.log('EPUB ArrayBuffer size:', arrayBuffer?.byteLength || 'undefined')
       if (!arrayBuffer || arrayBuffer.byteLength === 0) {
         console.error('EPUB ArrayBuffer is empty or undefined')
-        setDirectorInfo({
+        setBookInfo({
           title: 'Error Loading Book',
           author: 'Unknown',
           description: 'The EPUB file could not be loaded. Please try uploading it again.'
@@ -381,9 +381,9 @@ export default function Home() {
 
         applyThemeStyles(rendition, theme)
 
-        // Capture chapters/TOC
+        // Capture chapters/TOC from book.loaded.navigation
         try {
-          const nav = (book as any).navigation
+          const nav = (book.loaded as any).navigation
           const toc = (nav && Array.isArray(nav.toc) ? nav.toc : []) as any[]
           const mapped: ChapterItem[] = toc
             .filter((item) => item && item.href)
@@ -406,7 +406,7 @@ export default function Home() {
             metadata?.subtitle ||
             undefined
 
-          setDirectorInfo({
+          setBookInfo({
             title,
             author,
             description,
@@ -418,8 +418,6 @@ export default function Home() {
 
       rendition.on("rendered", () => {
         if (!cancelled) {
-          viewerRef.current?.classList.add("opacity-100")
-          
           // Fix iframe sandbox to allow scripts with minimal permissions
           const iframe = viewerRef.current?.querySelector('iframe')
           if (iframe) {
@@ -528,7 +526,7 @@ export default function Home() {
       }
     } catch (err) {
       console.error('Failed to create rendition or load book:', err)
-      setDirectorInfo({
+      setBookInfo({
         title: 'Error Loading Book',
         author: 'Unknown',
         description: 'The EPUB file could not be rendered. Please check if the file is a valid EPUB format.'
@@ -559,14 +557,14 @@ export default function Home() {
   }
 
   const toggleSpreadMode = () => {
-    setSpreadMode((prev) => (prev === 'none' ? 'always' : 'none'))
+    setSpreadMode((prev) => (prev === 'none' ? 'auto' : 'none'))
     // Live update if rendition is active and not on mobile
     if (
       renditionRef.current &&
       typeof window !== 'undefined' &&
       window.innerWidth >= 768
     ) {
-      const next = spreadMode === 'none' ? 'always' : 'none'
+      const next = spreadMode === 'none' ? 'auto' : 'none'
       try {
         renditionRef.current.spread(next)
       } catch {
@@ -580,6 +578,7 @@ export default function Home() {
       const next = !prev
       if (next) {
         setShowInfoPanel(false)
+        setShowBookmarksPanel(false)
         setIsUiVisible(false)
       } else {
         setIsUiVisible(true)
@@ -614,7 +613,11 @@ export default function Home() {
   }
 
   const addBookmark = async () => {
-    const cfi = currentLocationRef.current
+    if (!renditionRef.current) return
+    const currentLocation = renditionRef.current.currentLocation()
+    if (!currentLocation) return
+    
+    const cfi = currentLocation.start.cfi
     if (!cfi) return
     if (bookmarks.some((b) => b.cfi === cfi)) return
 
@@ -622,11 +625,10 @@ export default function Home() {
     let preview = ''
 
     try {
-      const loc = lastLocationRef.current
-      const href: string | undefined = loc?.start?.href
+      const href: string | undefined = currentLocation.start?.href
       if (href && chapters.length > 0) {
         const match = chapters.find((ch) =>
-          href.endsWith(ch.href),
+          href.includes(ch.href),
         )
         if (match) {
           chapterTitle = match.label
@@ -804,31 +806,39 @@ export default function Home() {
         <div className="min-h-screen w-full flex flex-col items-center justify-center px-4 py-8 md:px-8 md:py-12 relative bg-black">
           {/* Book Viewer - ALWAYS VISIBLE */}
           <div className="relative w-full max-w-6xl flex flex-col md:flex-row items-stretch justify-center md:items-start md:justify-between gap-6 md:gap-10">
-            {/* Full-screen tap zones for navigation (mouse + touch) */}
-            <button
-              type="button"
-              aria-label="Previous page"
-              className="fixed inset-y-0 left-0 w-[20%] z-[40] bg-transparent pointer-events-auto"
-              onClick={() => renditionRef.current?.prev()}
-            />
-            <button
-              type="button"
-              aria-label="Next page"
-              className="fixed inset-y-0 right-0 w-[20%] z-[40] bg-transparent pointer-events-auto"
-              onClick={() => renditionRef.current?.next()}
-            />
-
             {/* Book Card */}
             <div
               className={
                 theme === 'cinematic-dark'
                   ? 'relative flex-1 min-w-0 bg-[#050509] rounded-3xl shadow-[0_60px_160px_rgba(0,0,0,1)] border border-white/10'
-                  : 'relative flex-1 min-w-0 bg-[#f4f1ea] rounded-3xl shadow-[0_60px_160px_rgba(0,0,0,0.9)] border border-black/5'
+                  : 'relative flex-1 min-w-0 bg-[#F4ECD8] rounded-3xl shadow-[0_60px_160px_rgba(0,0,0,0.2)] border border-[#3B2F2F]/20'
               }
               style={{ minHeight: '78vh', height: '82vh' }}
             >
               {/* Spotlight-style vignette */}
               <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.12)_0,transparent_45%,rgba(0,0,0,0.8)_85%,rgba(0,0,0,0.98)_100%)]" />
+
+              {/* Navigation tap zones - only cover reading area */}
+              <button
+                type="button"
+                aria-label="Previous page"
+                className="absolute inset-y-0 left-0 w-[20%] z-[40] bg-transparent pointer-events-auto"
+                onClick={() => renditionRef.current?.prev()}
+                onTouchEnd={(e) => {
+                  e.preventDefault()
+                  renditionRef.current?.prev()
+                }}
+              />
+              <button
+                type="button"
+                aria-label="Next page"
+                className="absolute inset-y-0 right-0 w-[20%] z-[40] bg-transparent pointer-events-auto"
+                onClick={() => renditionRef.current?.next()}
+                onTouchEnd={(e) => {
+                  e.preventDefault()
+                  renditionRef.current?.next()
+                }}
+              />
 
               {/* Viewer - ALWAYS VISIBLE */}
               <div
@@ -842,45 +852,47 @@ export default function Home() {
 
           {/* UI Elements Wrapper - CONDITIONAL VISIBILITY */}
           <div
-            className={`absolute inset-0 pointer-events-none transition-opacity duration-500 z-50 ${
+            className={`absolute inset-0 transition-opacity duration-500 z-50 ${
+              isReaderMode ? 'pointer-events-none' : 'pointer-events-auto'
+            } ${
               uiChromeVisible ? 'opacity-100' : 'opacity-0'
             }`}
           >
-            {/* Global progress bar at the very bottom */}
-            <div className="fixed bottom-0 left-0 w-full h-[3px] bg-black/80 backdrop-blur-md z-[60] pointer-events-auto">
+            {/* Subtle progress indicator */}
+            <div className="fixed bottom-0 left-0 w-full h-[2px] bg-white/10 z-[60] pointer-events-auto">
               <div
-                className="h-full bg-gradient-to-r from-emerald-400 via-sky-400 to-violet-500 shadow-[0_0_20px_rgba(56,189,248,0.9),_0_0_40px_rgba(56,189,248,0.4)] transition-all duration-300 ease-out"
+                className="h-full bg-white/60 transition-all duration-300 ease-out"
                 style={{ width: `${progress}%` }}
               />
             </div>
 
             {/* Unified floating toolbar */}
             <div className="fixed top-4 right-4 z-50 pointer-events-auto">
-              <div className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-black/60/75 px-4 py-2 text-[10px] uppercase tracking-[0.18em] text-white/80 backdrop-blur-2xl shadow-[0_18px_45px_rgba(0,0,0,0.85)]">
+              <div className="inline-flex items-center gap-3 rounded-full border border-white/20 bg-black/60/75 px-5 py-2.5 text-[10px] uppercase tracking-[0.18em] text-white/80 backdrop-blur-2xl shadow-[0_18px_45px_rgba(0,0,0,0.85)]">
                 <button
                   onClick={toggleTheme}
-                  className="px-2 py-1 rounded-full bg-white/5 hover:bg-white/10 transition"
+                  className="px-3 py-1.5 rounded-full bg-white/5 hover:bg-white/10 transition"
                 >
                   {theme === 'cinematic-dark' ? 'Cinematic · Dark' : 'Classic · Sepia'}
                 </button>
                 <span className="h-4 w-px bg-white/15" />
                 <button
                   onClick={toggleSpreadMode}
-                  className="px-2 py-1 rounded-full bg-white/5 hover:bg-white/10 transition"
+                  className="px-3 py-1.5 rounded-full bg-white/5 hover:bg-white/10 transition"
                 >
                   {spreadMode === 'none' ? 'Single Page' : 'Two‑Page'}
                 </button>
                 <span className="h-4 w-px bg-white/15" />
                 <button
                   onClick={toggleFullscreen}
-                  className="px-2 py-1 rounded-full bg-white/5 hover:bg-white/10 transition"
+                  className="px-3 py-1.5 rounded-full bg-white/5 hover:bg-white/10 transition"
                 >
                   Full Screen
                 </button>
                 <span className="h-4 w-px bg-white/15" />
                 <button
                   onClick={toggleReaderMode}
-                  className="px-2 py-1 rounded-full bg-white/5 hover:bg-white/10 transition"
+                  className="px-3 py-1.5 rounded-full bg-white/5 hover:bg-white/10 transition"
                 >
                   {isReaderMode ? 'Exit Reader' : 'Reader Mode'}
                 </button>
@@ -891,30 +903,31 @@ export default function Home() {
                     if (isReaderMode) return
                     setShowInfoPanel((prev) => !prev)
                   }}
-                  className={`px-2 py-1 rounded-full bg-white/5 hover:bg-white/10 transition ${
+                  className={`px-3 py-1.5 rounded-full bg-white/5 hover:bg-white/10 transition ${
                     isReaderMode ? 'opacity-40 cursor-default pointer-events-none' : ''
                   }`}
                   aria-label="Book information"
                 >
                   Info
                 </button>
-                <span className="h-4 w-px bg-white/15" />
-                <button
-                  type="button"
-                  onClick={handleClick}
-                  className="px-2 py-1 rounded-full bg-white/5 hover:bg-white/10 transition"
-                >
-                  Change Book
-                </button>
               </div>
             </div>
+
+            {/* Floating Change Book button */}
+            <button
+              type="button"
+              onClick={handleClick}
+              className="fixed left-4 bottom-6 z-40 rounded-full border border-white/20 bg-black/70 px-4 py-2 text-[11px] font-medium uppercase tracking-[0.18em] text-white/80 backdrop-blur-xl shadow-[0_18px_45px_rgba(0,0,0,0.65)] hover:bg-white/10 transition pointer-events-auto"
+            >
+              Change Book
+            </button>
 
             {/* Chapters & Bookmarks pill */}
             {!isReaderMode && (
               <button
                 type="button"
                 onClick={() => setShowBookmarksPanel((prev) => !prev)}
-                className="fixed left-4 bottom-6 z-40 rounded-full border border-white/20 bg-black/70 px-4 py-2 text-[11px] font-medium uppercase tracking-[0.18em] text-white/80 backdrop-blur-xl shadow-[0_18px_45px_rgba(0,0,0,0.65)] hover:bg-white/10 transition pointer-events-auto"
+                className="fixed left-4 bottom-16 z-40 rounded-full border border-white/20 bg-black/70 px-4 py-2 text-[11px] font-medium uppercase tracking-[0.18em] text-white/80 backdrop-blur-xl shadow-[0_18px_45px_rgba(0,0,0,0.65)] hover:bg-white/10 transition pointer-events-auto"
               >
                 Chapters &amp; Bookmarks
               </button>
@@ -991,7 +1004,7 @@ export default function Home() {
 
             {/* Book Info slide-out drawer */}
             <AnimatePresence>
-              {showInfoPanel && !isReaderMode && directorInfo && (
+              {showInfoPanel && !isReaderMode && bookInfo && (
                 <motion.aside
                   initial={{ opacity: 0, x: 40 }}
                   animate={{ opacity: 1, x: 0 }}
@@ -1017,7 +1030,7 @@ export default function Home() {
                         Title
                       </div>
                       <div className="mt-1 text-base font-medium text-white">
-                        {directorInfo.title || 'Unknown Title'}
+                        {bookInfo.title || 'Unknown Title'}
                       </div>
                     </div>
                     <div>
@@ -1025,16 +1038,16 @@ export default function Home() {
                         Author
                       </div>
                       <div className="mt-1 text-[13px] text-white/80">
-                        {directorInfo.author || 'Unknown Author'}
+                        {bookInfo.author || 'Unknown Author'}
                       </div>
                     </div>
-                    {directorInfo.description && (
+                    {bookInfo.description && (
                       <div>
                         <div className="text-[11px] uppercase tracking-[0.18em] text-white/50 mb-1">
                           Description
                         </div>
                         <p className="text-[12px] leading-relaxed text-white/80">
-                          {directorInfo.description}
+                          {bookInfo.description}
                         </p>
                       </div>
                     )}
