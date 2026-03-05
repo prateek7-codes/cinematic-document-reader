@@ -357,6 +357,7 @@ export default function Home() {
           width: '100%',
           height: '100%',
           flow: 'paginated',
+          manager: 'default',
           spread: effectiveSpread,
           snap: true,
           allowScriptedContent: true,
@@ -419,10 +420,10 @@ export default function Home() {
         if (!cancelled) {
           viewerRef.current?.classList.add("opacity-100")
           
-          // Fix iframe sandbox to allow scripts
+          // Fix iframe sandbox to allow scripts with minimal permissions
           const iframe = viewerRef.current?.querySelector('iframe')
           if (iframe) {
-            iframe.setAttribute('sandbox', 'allow-same-origin allow-scripts allow-forms allow-popups allow-modals')
+            iframe.setAttribute('sandbox', 'allow-same-origin allow-scripts')
           }
         }
       })
@@ -729,6 +730,41 @@ export default function Home() {
 
   const uiChromeVisible = !isReaderMode || isUiVisible
 
+  // Monitor and fix iframe sandbox permissions
+  useEffect(() => {
+    if (!viewerRef.current) return
+
+    const checkAndFixIframe = () => {
+      const iframe = viewerRef.current?.querySelector('iframe')
+      if (iframe && iframe.getAttribute('sandbox') !== 'allow-same-origin allow-scripts') {
+        iframe.setAttribute('sandbox', 'allow-same-origin allow-scripts')
+        console.log('Fixed iframe sandbox permissions for EPUB rendering')
+      }
+    }
+
+    // Check immediately
+    checkAndFixIframe()
+
+    // Set up mutation observer to catch dynamically created iframes
+    const observer = new MutationObserver((mutations) => {
+      mutations.forEach((mutation) => {
+        if (mutation.type === 'childList') {
+          mutation.addedNodes.forEach((node) => {
+            if (node.nodeName === 'IFRAME') {
+              const iframe = node as HTMLIFrameElement
+              iframe.setAttribute('sandbox', 'allow-same-origin allow-scripts')
+              console.log('Fixed dynamically created iframe sandbox permissions')
+            }
+          })
+        }
+      })
+    })
+
+    observer.observe(viewerRef.current, { childList: true, subtree: true })
+
+    return () => observer.disconnect()
+  }, [bookFile])
+
   return (
     <main
       className={
@@ -798,7 +834,8 @@ export default function Home() {
               <div
                 ref={viewerRef}
                 key={currentLocation || 'initial'}
-                className="relative h-[78vh] md:h-[82vh] w-full px-5 sm:px-8 md:px-14 py-10 md:py-14 text-[18px] leading-relaxed overflow-hidden opacity-100"
+                className="relative min-h-[600px] h-[78vh] md:h-[82vh] w-full px-5 sm:px-8 md:px-14 py-10 md:py-14 text-[18px] leading-relaxed overflow-hidden opacity-100"
+                style={{ minHeight: '600px', minWidth: '100%' }}
               />
             </div>
           </div>
